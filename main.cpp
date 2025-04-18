@@ -52,58 +52,10 @@ void setupNFQueue() {
 }
 
 
-static u_int32_t print_pkt (struct nfq_data *tb)
+static u_int32_t returnId(struct nfq_data *tb)
 {
-    int id = 0;
-    struct nfqnl_msg_packet_hdr *ph;
-    struct nfqnl_msg_packet_hw *hwph;
-    u_int32_t mark,ifi;
-    int ret;
-    unsigned char *data;
-
-    ph = nfq_get_msg_packet_hdr(tb);
-    if (ph) {
-        id = ntohl(ph->packet_id);
-        printf("hw_protocol=0x%04x hook=%u id=%u ",
-               ntohs(ph->hw_protocol), ph->hook, id);
-    }
-
-    hwph = nfq_get_packet_hw(tb);
-    if (hwph) {
-        int i, hlen = ntohs(hwph->hw_addrlen);
-
-        printf("hw_src_addr=");
-        for (i = 0; i < hlen-1; i++)
-            printf("%02x:", hwph->hw_addr[i]);
-        printf("%02x ", hwph->hw_addr[hlen-1]);
-    }
-
-    mark = nfq_get_nfmark(tb);
-    if (mark)
-        printf("mark=%u ", mark);
-
-    ifi = nfq_get_indev(tb);
-    if (ifi)
-        printf("indev=%u ", ifi);
-
-    ifi = nfq_get_outdev(tb);
-    if (ifi)
-        printf("outdev=%u ", ifi);
-    ifi = nfq_get_physindev(tb);
-    if (ifi)
-        printf("physindev=%u ", ifi);
-
-    ifi = nfq_get_physoutdev(tb);
-    if (ifi)
-        printf("physoutdev=%u ", ifi);
-
-    ret = nfq_get_payload(tb, &data);
-    if (ret >= 0)
-        printf("payload_len=%d\n", ret);
-
-    fputc('\n', stdout);
-
-    return id;
+    struct nfqnl_msg_packet_hdr *ph = nfq_get_msg_packet_hdr(tb);
+    return ph ? ntohl(ph->packet_id) : 0;
 }
 
 
@@ -121,13 +73,17 @@ static std::string extractHttpHost(struct nfq_data *tb){
         int tcpHdrLen = ((tcp->offsetFlags >> 4) & 0x0F) * 4;
 
         unsigned char* http = (unsigned char*)tcp + tcpHdrLen;
-        char* hostStart = strstr((char*)http, "Host: ");
 
-        if (hostStart != nullptr) {
-            hostStart += strlen("Host: ");
-            char* hostEnd = strstr(hostStart, "\r\n");
+        while (*http == ' ' || *http == '\t' || *http == '\r' || *http == '\n') http++;
+        if (strncmp((char*)http, "GET ", 4) == 0 || strncmp((char*)http, "POST ", 5) == 0){
+            char* hostStart = strstr((char*)http, "Host: ");
 
-            if (hostEnd != nullptr) return std::string(hostStart, hostEnd);
+            if (hostStart) {
+                hostStart += strlen("Host: ");
+                char* hostEnd = strstr(hostStart, "\r\n");
+
+                if (hostEnd) return std::string(hostStart, hostEnd);
+            }
         }
     }
     return "";
@@ -137,8 +93,7 @@ static std::string extractHttpHost(struct nfq_data *tb){
 static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
               struct nfq_data *nfa, void *data)
 {
-    u_int32_t id = print_pkt(nfa);
-    printf("entering callback\n");
+    u_int32_t id = returnId(nfa);
 
     std::unordered_set<std::string>* domainSet = static_cast<std::unordered_set<std::string>*>(data);
     std::string host = extractHttpHost(nfa);
@@ -202,25 +157,23 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
-    printf("setting copy_packet mode\n\n");
+    printf("setting copy_packet mode\n");
     if (nfq_set_mode(qh, NFQNL_COPY_PACKET, 0xffff) < 0) {
         fprintf(stderr, "can't set packet_copy mode\n");
         exit(1);
     }
+    fputc('\n', stdout);
 
     fd = nfq_fd(h);
 
     for (;;) {
         if ((rv = recv(fd, buf, sizeof(buf), 0)) >= 0) {
-            printf("pkt received\n");
             nfq_handle_packet(h, buf, rv);
             continue;
         }
 
-        if (rv < 0 && errno == ENOBUFS) {
-            printf("losing packets!\n");
-            continue;
-        }
+        if (rv < 0 && errno == ENOBUFS) continue;
+
         perror("recv failed");
         break;
     }
