@@ -73,8 +73,9 @@ static std::string extractHttpHost(struct nfq_data *tb){
         int tcpHdrLen = ((tcp->offsetFlags >> 4) & 0x0F) * 4;
 
         unsigned char* http = (unsigned char*)tcp + tcpHdrLen;
+        unsigned char* httpEnd = data + ret;
 
-        while (*http == ' ' || *http == '\t' || *http == '\r' || *http == '\n') http++;
+        while ((http < httpEnd) && (*http == ' ' || *http == '\t' || *http == '\r' || *http == '\n')) http++;
         if (strncmp((char*)http, "GET ", 4) == 0 || strncmp((char*)http, "POST ", 5) == 0){
             char* hostStart = strstr((char*)http, "Host: ");
 
@@ -94,6 +95,10 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
               struct nfq_data *nfa, void *data)
 {
     u_int32_t id = returnId(nfa);
+    if (!id) {
+        fprintf(stderr, "Warning: Invalid packet ID (0). Dropping packet.\n");
+        return nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
+    }
 
     std::unordered_set<std::string>* domainSet = static_cast<std::unordered_set<std::string>*>(data);
     std::string host = extractHttpHost(nfa);
